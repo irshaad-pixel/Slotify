@@ -1,0 +1,2 @@
+[functions."send-reminders"]
+  schedule = "*/1 * * * *"
