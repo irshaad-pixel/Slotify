@@ -17,20 +17,47 @@ webpush.setVapidDetails(
   VAPID_PRIVATE_KEY
 );
 
+const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
 const REMINDER_LEAD_MINUTES = 10;
 const DAY_MAP = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+// Real period start times (24-hour, IST). Period number -> minutes after midnight.
+const PERIOD_START_MINUTES: Record<number, number> = {
+  1: 9 * 60,        // 9:00 AM
+  2: 9 * 60 + 50,    // 9:50 AM
+  3: 10 * 60 + 50,   // 10:50 AM
+  4: 11 * 60 + 40,   // 11:40 AM
+  5: 13 * 60 + 20,   // 1:20 PM
+  6: 14 * 60 + 10,   // 2:10 PM
+  7: 15 * 60 + 10,   // 3:10 PM
+  8: 16 * 60,        // 4:00 PM
+};
+
+// Get current time in IST regardless of the server's own timezone (Netlify runs in UTC).
+function getISTNow(): Date {
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const istOffsetMs = 5.5 * 60 * 60000;
+  return new Date(utcMs + istOffsetMs);
+}
 
 export default async () => {
   try {
-    const now = new Date();
-    const target = new Date(now.getTime() + REMINDER_LEAD_MINUTES * 60000);
-    const dayName = DAY_MAP[target.getDay()];
-    const targetHour = target.getHours();
-    const targetMinute = target.getMinutes();
+    const istNow = getISTNow();
+    const dayName = DAY_MAP[istNow.getDay()];
+    const nowMinutes = istNow.getHours() * 60 + istNow.getMinutes();
+    const targetMinutes = nowMinutes + REMINDER_LEAD_MINUTES;
 
-    // Fetch all timetables
+    // Find which period (if any) starts within this minute's target window.
+    const matchingPeriods = Object.entries(PERIOD_START_MINUTES)
+      .filter(([, startMin]) => startMin === targetMinutes)
+      .map(([period]) => Number(period));
+
+    if (matchingPeriods.length === 0) {
+      return new Response(JSON.stringify({ ok: true, sent: 0, reason: 'no period starting in 10 min' }), { status: 200 });
+    }
+
     const { data: timetables, error: ttError } = await supabase
       .from('timetables')
       .select('dept_id, section, grid');
@@ -44,16 +71,16 @@ export default async () => {
       if (!dayGrid) continue;
 
       for (const slot of dayGrid) {
-        // slot format: [startHour, endHour, "LABEL", optional room string]
-        const [startHour, , label] = slot;
-        if (startHour === targetHour || (startHour === targetHour + 1 && targetMinute >= 50)) {
+        // slot format: [startPeriod, endPeriod, "LABEL", optional room string]
+        const [startPeriod, , label] = slot;
+        if (matchingPeriods.includes(startPeriod)) {
           matches.push({ dept_id: row.dept_id, section: row.section, label });
         }
       }
     }
 
     if (matches.length === 0) {
-      return new Response(JSON.stringify({ ok: true, sent: 0 }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, sent: 0, reason: 'no classes found for matching period' }), { status: 200 });
     }
 
     let sent = 0;
@@ -84,7 +111,6 @@ export default async () => {
           sent++;
         } catch (err: any) {
           if (err.statusCode === 410 || err.statusCode === 404) {
-            // Subscription expired/invalid — clean it up
             await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint);
           } else {
             console.error('Push failed:', err);
@@ -93,7 +119,7 @@ export default async () => {
       }
     }
 
-    return new Response(JSON.stringify({ ok: true, sent }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, sent, matchedClasses: matches.length }), { status: 200 });
   } catch (err: any) {
     console.error('send-reminders error:', err);
     return new Response(JSON.stringify({ ok: false, error: err.message }), { status: 500 });
