@@ -3135,6 +3135,165 @@
   // iOS never fires beforeinstallprompt, so check directly once the splash is out of the way
   setTimeout(() => { if (isIOS()) maybeShowInstallBanner(); }, 4000);
 </script>
-
+<!-- QR Scanner + Share feature (paste right before </body>) -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+ 
+<button id="qrFabBtn" style="position:fixed;bottom:20px;right:20px;z-index:999;
+  width:56px;height:56px;border-radius:50%;background:#e91e8c;color:#fff;
+  border:none;font-size:22px;box-shadow:0 4px 12px rgba(0,0,0,.3);">⛶</button>
+ 
+<div id="qrPanel" style="display:none;position:fixed;inset:0;z-index:1000;
+  background:rgba(0,0,0,.9);color:#fff;padding:20px;overflow:auto;">
+  <button onclick="closeQrPanel()" style="float:right;background:none;border:none;
+    color:#fff;font-size:24px;">✕</button>
+  <h3>Join via QR / Share</h3>
+ 
+  <div style="margin:16px 0;">
+    <button id="startScanBtn" onclick="startScan()">📷 Scan QR to join dept/section</button>
+    <div id="qrReader" style="width:280px;margin-top:10px;"></div>
+  </div>
+ 
+  <hr style="opacity:.3;">
+ 
+  <div style="margin:16px 0;">
+    <p>Share your timetable:</p>
+    <img id="myQrImg" style="border-radius:8px;" />
+    <br>
+    <button onclick="shareMyTimetable()">Share my timetable link</button>
+  </div>
+ 
+  <div style="margin:16px 0;">
+    <p>Invite friends to Slotify:</p>
+    <button onclick="shareApp()">Share app link</button>
+  </div>
+</div>
+ 
+<script>
+const APP_BASE_URL = 'https://slotifytt.netlify.app';
+ 
+// --- 1. Open/close panel (wired into the app's back-button/history routing) ---
+let _qrPanelOpen = false;
+ 
+document.getElementById('qrFabBtn').onclick = () => {
+  document.getElementById('qrPanel').style.display = 'block';
+  _qrPanelOpen = true;
+  renderMyQr();
+  // Push a history entry so the phone's back button closes the panel
+  // instead of leaving the app or navigating a screen behind it.
+  try {
+    history.pushState({ qrPanel: true }, '', location.pathname + location.search);
+  } catch (e) {
+    console.warn('History API unavailable, QR panel back-button support disabled here', e);
+  }
+};
+ 
+// Called by the ✕ button (a user-initiated close, not a back-button pop).
+function closeQrPanel() {
+  if (!_qrPanelOpen) return;
+  _qrPanelOpen = false;
+  document.getElementById('qrPanel').style.display = 'none';
+  if (window._html5QrCode) window._html5QrCode.stop().catch(()=>{});
+  // Pop the history entry we pushed on open, so the back-button stack
+  // stays in sync with what's actually on screen.
+  try { history.back(); } catch (e) {}
+}
+ 
+// Intercept back-button presses in the capture phase so we can close the
+// panel first, without letting the app's own popstate handler run against
+// a { qrPanel: true } state it doesn't know about.
+window.addEventListener('popstate', (e) => {
+  if (_qrPanelOpen) {
+    _qrPanelOpen = false;
+    document.getElementById('qrPanel').style.display = 'none';
+    if (window._html5QrCode) window._html5QrCode.stop().catch(()=>{});
+    e.stopImmediatePropagation();
+  }
+}, true); // capture: true — runs before the app's existing popstate listener
+ 
+// --- 2. Scanning ---
+function startScan() {
+  const reader = document.getElementById('qrReader');
+  reader.innerHTML = '';
+  window._html5QrCode = new Html5Qrcode("qrReader");
+  window._html5QrCode.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: 220 },
+    (decodedText) => {
+      window._html5QrCode.stop();
+      handleScannedUrl(decodedText);
+    },
+    () => {} // ignore per-frame scan failures
+  );
+}
+ 
+function handleScannedUrl(text) {
+  try {
+    const url = new URL(text);
+    const dept = url.searchParams.get('dept');
+    const section = url.searchParams.get('section');
+    if (dept) {
+      setProfile({ deptId: dept, section: section || null });
+      closeQrPanel();
+      enterApp(); // same function used by the normal dept/section picker
+    } else {
+      alert('QR did not contain a valid dept/section link.');
+    }
+  } catch (e) {
+    alert('Not a valid Slotify QR code.');
+  }
+}
+ 
+// --- 3. Auto-apply dept/section from URL on page load ---
+(function applyFromUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  const dept = params.get('dept');
+  if (dept) {
+    setProfile({ deptId: dept, section: params.get('section') || null });
+    // enterApp() runs naturally during the page's normal boot sequence,
+    // since getProfile() will now return this profile.
+  }
+})();
+ 
+// --- 4. Sharing ---
+function getCurrentDeptSection() {
+  const profile = getProfile();
+  return profile
+    ? { dept: profile.deptId, section: profile.section || '' }
+    : { dept: '', section: '' };
+}
+ 
+function renderMyQr() {
+  const { dept, section } = getCurrentDeptSection();
+  if (!dept) {
+    document.getElementById('myQrImg').src = '';
+    return;
+  }
+  const link = `${APP_BASE_URL}/?dept=${dept}${section ? '&section=' + section : ''}`;
+  document.getElementById('myQrImg').src =
+    `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(link)}`;
+}
+ 
+function shareMyTimetable() {
+  const { dept, section } = getCurrentDeptSection();
+  if (!dept) { alert('Pick your department first.'); return; }
+  const link = `${APP_BASE_URL}/?dept=${dept}${section ? '&section=' + section : ''}`;
+  if (navigator.share) {
+    navigator.share({ title: 'My Slotify Timetable', url: link });
+  } else {
+    navigator.clipboard.writeText(link);
+    alert('Link copied: ' + link);
+  }
+}
+ 
+function shareApp() {
+  if (navigator.share) {
+    navigator.share({ title: 'Slotify', text: 'Check out Slotify — never miss a class!', url: APP_BASE_URL });
+  } else {
+    navigator.clipboard.writeText(APP_BASE_URL);
+    alert('Link copied: ' + APP_BASE_URL);
+  }
+}
+</script>
+ 
 </body>
 </html>
