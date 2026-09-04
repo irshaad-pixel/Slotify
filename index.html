@@ -3149,14 +3149,34 @@
   <h3>Join via QR / Share</h3>
  
   <div style="margin:16px 0;">
-    <button id="startScanBtn" onclick="startScan()">📷 Scan QR to join dept/section</button>
-    <div id="qrReader" style="width:280px;margin-top:10px;"></div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <button id="joinTabScan" onclick="showJoinTab('scan')" style="flex:1;padding:8px;">📷 Scan a QR</button>
+      <button id="joinTabShow" onclick="showJoinTab('show')" style="flex:1;padding:8px;">🔳 Show invite QR</button>
+    </div>
+ 
+    <div id="joinScanView">
+      <p style="opacity:.7;font-size:13px;">
+        Scan any Slotify QR — from a friend's phone, a poster, or a noticeboard.
+        It'll open the app so you can pick your own department.
+      </p>
+      <button id="startScanBtn" onclick="startScan()">Start scanning</button>
+      <div id="qrReader" style="width:280px;margin-top:10px;"></div>
+    </div>
+ 
+    <div id="joinShowView" style="display:none;">
+      <p style="opacity:.7;font-size:13px;">
+        This QR is the same for everyone — it just opens Slotify.
+        Show it to a friend, or print it for a noticeboard/poster.
+        Whoever scans it picks their own department after.
+      </p>
+      <img id="joinQrImg" style="border-radius:8px;" />
+    </div>
   </div>
  
   <hr style="opacity:.3;">
  
   <div style="margin:16px 0;">
-    <p>Share your timetable:</p>
+    <p>Share your own timetable (this one IS specific to your dept/section):</p>
     <img id="myQrImg" style="border-radius:8px;" />
     <br>
     <button onclick="shareMyTimetable()">Share my timetable link</button>
@@ -3177,9 +3197,8 @@ let _qrPanelOpen = false;
 document.getElementById('qrFabBtn').onclick = () => {
   document.getElementById('qrPanel').style.display = 'block';
   _qrPanelOpen = true;
+  showJoinTab('show'); // default to showing the invite QR — most people will be sharing, not scanning
   renderMyQr();
-  // Push a history entry so the phone's back button closes the panel
-  // instead of leaving the app or navigating a screen behind it.
   try {
     history.pushState({ qrPanel: true }, '', location.pathname + location.search);
   } catch (e) {
@@ -3187,20 +3206,14 @@ document.getElementById('qrFabBtn').onclick = () => {
   }
 };
  
-// Called by the ✕ button (a user-initiated close, not a back-button pop).
 function closeQrPanel() {
   if (!_qrPanelOpen) return;
   _qrPanelOpen = false;
   document.getElementById('qrPanel').style.display = 'none';
   if (window._html5QrCode) window._html5QrCode.stop().catch(()=>{});
-  // Pop the history entry we pushed on open, so the back-button stack
-  // stays in sync with what's actually on screen.
   try { history.back(); } catch (e) {}
 }
  
-// Intercept back-button presses in the capture phase so we can close the
-// panel first, without letting the app's own popstate handler run against
-// a { qrPanel: true } state it doesn't know about.
 window.addEventListener('popstate', (e) => {
   if (_qrPanelOpen) {
     _qrPanelOpen = false;
@@ -3208,9 +3221,27 @@ window.addEventListener('popstate', (e) => {
     if (window._html5QrCode) window._html5QrCode.stop().catch(()=>{});
     e.stopImmediatePropagation();
   }
-}, true); // capture: true — runs before the app's existing popstate listener
+}, true);
  
-// --- 2. Scanning ---
+// --- 2. Scan / Show tabs ---
+function showJoinTab(which) {
+  const scanning = which === 'scan';
+  document.getElementById('joinScanView').style.display = scanning ? 'block' : 'none';
+  document.getElementById('joinShowView').style.display = scanning ? 'none' : 'block';
+  if (!scanning) {
+    if (window._html5QrCode) window._html5QrCode.stop().catch(()=>{});
+    renderJoinQr();
+  }
+}
+ 
+// The invite QR is dept-agnostic — it's just the app's base URL. Printable
+// once, works for every department, since it doesn't set any profile itself.
+function renderJoinQr() {
+  document.getElementById('joinQrImg').src =
+    `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(APP_BASE_URL)}`;
+}
+ 
+// --- 3. Scanning ---
 function startScan() {
   const reader = document.getElementById('qrReader');
   reader.innerHTML = '';
@@ -3222,39 +3253,53 @@ function startScan() {
       window._html5QrCode.stop();
       handleScannedUrl(decodedText);
     },
-    () => {} // ignore per-frame scan failures
+    () => {}
   );
 }
  
 function handleScannedUrl(text) {
+  let url;
   try {
-    const url = new URL(text);
-    const dept = url.searchParams.get('dept');
-    const section = url.searchParams.get('section');
-    if (dept) {
-      setProfile({ deptId: dept, section: section || null });
-      closeQrPanel();
-      enterApp(); // same function used by the normal dept/section picker
-    } else {
-      alert('QR did not contain a valid dept/section link.');
-    }
+    url = new URL(text);
   } catch (e) {
     alert('Not a valid Slotify QR code.');
+    return;
+  }
+  if (!text.startsWith(APP_BASE_URL)) {
+    alert('This QR is not from Slotify.');
+    return;
+  }
+ 
+  const dept = url.searchParams.get('dept');
+  const section = url.searchParams.get('section');
+ 
+  closeQrPanel();
+ 
+  if (dept) {
+    // Backwards-compatible: a link that DOES carry a specific dept/section
+    // (e.g. from "Share my timetable") still auto-applies it.
+    setProfile({ deptId: dept, section: section || null });
+    enterApp();
+  } else {
+    // Generic invite QR (poster/noticeboard/base link) — no dept baked in,
+    // so just send them into the app's normal picker to choose their own.
+    window.location.href = APP_BASE_URL;
   }
 }
  
-// --- 3. Auto-apply dept/section from URL on page load ---
+// --- 4. Auto-apply dept/section from URL on page load (only when present) ---
 (function applyFromUrlParams() {
   const params = new URLSearchParams(window.location.search);
   const dept = params.get('dept');
   if (dept) {
     setProfile({ deptId: dept, section: params.get('section') || null });
-    // enterApp() runs naturally during the page's normal boot sequence,
-    // since getProfile() will now return this profile.
   }
+  // If there's no dept param, do nothing — the app's own normal boot logic
+  // (showing the department picker) takes over, which is exactly what a
+  // generic invite link should trigger.
 })();
  
-// --- 4. Sharing ---
+// --- 5. Sharing your own timetable (still dept/section specific) ---
 function getCurrentDeptSection() {
   const profile = getProfile();
   return profile
@@ -3294,6 +3339,7 @@ function shareApp() {
   }
 }
 </script>
+ 
  
 </body>
 </html>
