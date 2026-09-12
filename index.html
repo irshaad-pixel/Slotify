@@ -1211,6 +1211,7 @@
     <div class="admin-topbar">
       <h2>Slotify Admin</h2>
       <button class="admin-exit" id="adminExitBtn">Exit admin &rarr;</button>
+      <button class="admin-exit" id="calendarTabBtn" style="margin-right:8px;">📅 Calendar</button>
     </div>
     <div class="admin-stats" id="adminStats">
       <div class="admin-stat"><span class="admin-stat-num" id="statInstalls">—</span><span class="admin-stat-label">installs</span></div>
@@ -1241,6 +1242,177 @@
       Changes save to a shared database — once you hit Save, they're live for every student's app within a few seconds. Period numbers follow the department's own schedule — leave "extra" blank unless it's a lab/room note.
     </div>
   </section>
+
+  <div id="calendarAdminPanel" style="display:none;position:fixed;inset:0;z-index:1000;
+  background:rgba(0,0,0,.92);color:#fff;padding:20px;overflow:auto;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+    <h2 style="font-family:var(--font-display);font-size:20px;">Holidays & Exam Days</h2>
+    <button id="calendarCloseBtn" style="background:none;border:none;color:#fff;font-size:24px;">✕</button>
+  </div>
+  <p style="opacity:.7;font-size:13px;margin-bottom:16px;">
+    Add a date to silence normal class reminders that day (holiday, exam, semester break),
+    optionally with a one-time message sent instead (e.g. "All the best for your exams!").
+    Leave the message blank for a plain silent day.
+  </p>
+
+  <div style="border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:14px;margin-bottom:20px;">
+    <h3 style="font-size:15px;margin-bottom:10px;">Add a date</h3>
+    <input type="date" id="calNewDate" style="width:100%;padding:8px;margin-bottom:8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:#111;color:#fff;">
+    <select id="calNewType" style="width:100%;padding:8px;margin-bottom:8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:#111;color:#fff;">
+      <option value="holiday">Holiday</option>
+      <option value="exam">Exam day</option>
+      <option value="custom">Custom / festival</option>
+    </select>
+    <textarea id="calNewMessage" placeholder="Optional one-time message (leave blank for silent day)"
+      style="width:100%;padding:8px;margin-bottom:8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:#111;color:#fff;min-height:60px;"></textarea>
+    <button class="admin-save" id="calAddBtn">Add date</button>
+    <span class="admin-status" id="calAddStatus"></span>
+  </div>
+
+  <h3 style="font-size:15px;margin-bottom:10px;">Upcoming & recent dates</h3>
+  <div id="calList">Loading…</div>
+</div>
+
+<script>
+// Reuses the same SUPABASE_URL / SUPABASE_ANON_KEY already defined earlier
+// in index.html — this block must load AFTER that section.
+
+async function calFetchOverrides() {
+  const url = `${SUPABASE_URL}/rest/v1/calendar_overrides?select=*&order=date.asc`;
+  const res = await fetch(url, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` }
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+async function calSaveOverride(row) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/calendar_overrides`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    },
+    body: JSON.stringify([row]),
+  });
+  return res.ok;
+}
+
+async function calDeleteOverride(id) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/calendar_overrides?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` }
+  });
+  return res.ok;
+}
+
+async function calToggleSuppress(id, newValue) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/calendar_overrides?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({ suppress_reminders: newValue }),
+  });
+  return res.ok;
+}
+
+async function renderCalendarList() {
+  const listEl = document.getElementById('calList');
+  listEl.textContent = 'Loading…';
+  const rows = await calFetchOverrides();
+
+  if (rows.length === 0) {
+    listEl.innerHTML = '<p style="opacity:.6;">No dates added yet.</p>';
+    return;
+  }
+
+  listEl.innerHTML = '';
+  rows.forEach(row => {
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;';
+
+    const info = document.createElement('div');
+    info.innerHTML = `
+      <strong>${row.date}</strong> — ${row.type}
+      ${row.suppress_reminders ? '<span style="color:#ff8fc7;">(reminders off)</span>' : '<span style="opacity:.6;">(reminders still on)</span>'}
+      ${row.one_time_message ? `<div style="opacity:.75;font-size:13px;margin-top:4px;">"${row.one_time_message}"${row.message_sent ? ' — already sent ✓' : ' — not sent yet'}</div>` : ''}
+    `;
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.textContent = row.suppress_reminders ? 'Turn reminders back on' : 'Suppress reminders';
+    toggleBtn.className = 'admin-reset';
+    toggleBtn.onclick = async () => {
+      toggleBtn.disabled = true;
+      await calToggleSuppress(row.id, !row.suppress_reminders);
+      renderCalendarList();
+    };
+
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'Delete';
+    delBtn.className = 'admin-reset';
+    delBtn.onclick = async () => {
+      if (!confirm(`Delete the override for ${row.date}?`)) return;
+      delBtn.disabled = true;
+      await calDeleteOverride(row.id);
+      renderCalendarList();
+    };
+
+    actions.appendChild(toggleBtn);
+    actions.appendChild(delBtn);
+    card.appendChild(info);
+    card.appendChild(actions);
+    listEl.appendChild(card);
+  });
+}
+
+document.getElementById('calAddBtn').addEventListener('click', async () => {
+  const date = document.getElementById('calNewDate').value;
+  const type = document.getElementById('calNewType').value;
+  const message = document.getElementById('calNewMessage').value.trim();
+  const statusEl = document.getElementById('calAddStatus');
+
+  if (!date) {
+    statusEl.textContent = 'Pick a date first.';
+    return;
+  }
+
+  statusEl.textContent = 'Saving…';
+  const ok = await calSaveOverride({
+    date,
+    type,
+    suppress_reminders: true,
+    one_time_message: message || null,
+    message_sent: false,
+  });
+
+  if (ok) {
+    statusEl.textContent = 'Added ✓';
+    document.getElementById('calNewDate').value = '';
+    document.getElementById('calNewMessage').value = '';
+    renderCalendarList();
+  } else {
+    statusEl.textContent = 'Failed — check your connection and try again.';
+  }
+});
+
+document.getElementById('calendarTabBtn').addEventListener('click', () => {
+  document.getElementById('calendarAdminPanel').style.display = 'block';
+  renderCalendarList();
+});
+
+document.getElementById('calendarCloseBtn').addEventListener('click', () => {
+  document.getElementById('calendarAdminPanel').style.display = 'none';
+});
+</script>
 
   <!-- CLASS DETAIL MODAL -->
   <div class="class-modal-backdrop" id="classModalBackdrop">
