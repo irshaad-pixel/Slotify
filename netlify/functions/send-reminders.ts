@@ -1,6 +1,6 @@
 // Netlify Scheduled Function: send-reminders
-// Runs every minute, finds anyone whose next class starts in ~10 minutes, and
-// sends them a real push notification via the Web Push protocol.
+// Runs every minute. Checks for holidays/exam-day overrides first; otherwise
+// finds anyone whose next class starts in ~10 minutes and sends a push.
 
 import webpush from 'web-push';
 import { createClient } from '@supabase/supabase-js';
@@ -24,14 +24,14 @@ const DAY_MAP = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // Real period start times (24-hour, IST). Period number -> minutes after midnight.
 const PERIOD_START_MINUTES: Record<number, number> = {
-  1: 9 * 60,        // 9:00 AM
-  2: 9 * 60 + 50,    // 9:50 AM
-  3: 10 * 60 + 50,   // 10:50 AM
-  4: 11 * 60 + 40,   // 11:40 AM
-  5: 13 * 60 + 20,   // 1:20 PM
-  6: 14 * 60 + 10,   // 2:10 PM
-  7: 15 * 60 + 10,   // 3:10 PM
-  8: 16 * 60,        // 4:00 PM
+  1: 9 * 60,         // 9:00 AM
+  2: 9 * 60 + 50,     // 9:50 AM
+  3: 10 * 60 + 50,    // 10:50 AM
+  4: 11 * 60 + 40,    // 11:40 AM
+  5: 13 * 60 + 20,    // 1:20 PM
+  6: 14 * 60 + 10,    // 2:10 PM
+  7: 15 * 60 + 10,    // 3:10 PM
+  8: 16 * 60,         // 4:00 PM
 };
 
 // Get current time in IST regardless of the server's own timezone (Netlify runs in UTC).
@@ -42,14 +42,81 @@ function getISTNow(): Date {
   return new Date(utcMs + istOffsetMs);
 }
 
+function toDateString(d: Date): string {
+  // YYYY-MM-DD, matching Postgres 'date' column format
+  return d.toISOString().slice(0, 10);
+}
+
+async function sendToAllSubscribers(title: string, body: string) {
+  const { data: subs, error } = await supabase.from('push_subscriptions').select('*');
+  if (error || !subs) return 0;
+
+  let sent = 0;
+  for (const sub of subs) {
+    const pushSubscription = {
+      endpoint: sub.endpoint,
+      keys: { p256dh: sub.p256dh, auth: sub.auth },
+    };
+    try {
+      await webpush.sendNotification(pushSubscription, JSON.stringify({ title, body }), {
+        urgency: 'high', // tells the OS to wake the device immediately, not batch it
+        TTL: 300,        // stop retrying after 5 min — a stale holiday message isn't useful late
+      });
+      sent++;
+    } catch (err: any) {
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint);
+      } else {
+        console.error('Push failed (broadcast):', err);
+      }
+    }
+  }
+  return sent;
+}
+
 export default async () => {
   try {
     const istNow = getISTNow();
+    const todayStr = toDateString(istNow);
+
+    // --- Check for a holiday/exam override on today's date first ---
+    const { data: override, error: overrideError } = await supabase
+      .from('calendar_overrides')
+      .select('*')
+      .eq('date', todayStr)
+      .maybeSingle();
+
+    if (overrideError) throw overrideError;
+
+    if (override) {
+      // Send the one-time message once, the first run of the day it applies.
+      if (override.one_time_message && !override.message_sent) {
+        const sent = await sendToAllSubscribers('Slotify', override.one_time_message);
+        await supabase
+          .from('calendar_overrides')
+          .update({ message_sent: true })
+          .eq('id', override.id);
+        return new Response(
+          JSON.stringify({ ok: true, oneTimeMessageSent: sent, suppressedReminders: !!override.suppress_reminders }),
+          { status: 200 }
+        );
+      }
+
+      if (override.suppress_reminders) {
+        // Holiday/exam day — skip normal class reminders entirely.
+        return new Response(
+          JSON.stringify({ ok: true, sent: 0, reason: `reminders suppressed (${override.type})` }),
+          { status: 200 }
+        );
+      }
+      // If suppress_reminders is false, fall through to normal logic below.
+    }
+
+    // --- Normal class-reminder logic (unchanged) ---
     const dayName = DAY_MAP[istNow.getDay()];
     const nowMinutes = istNow.getHours() * 60 + istNow.getMinutes();
     const targetMinutes = nowMinutes + REMINDER_LEAD_MINUTES;
 
-    // Find which period (if any) starts within this minute's target window.
     const matchingPeriods = Object.entries(PERIOD_START_MINUTES)
       .filter(([, startMin]) => startMin === targetMinutes)
       .map(([period]) => Number(period));
@@ -71,7 +138,6 @@ export default async () => {
       if (!dayGrid) continue;
 
       for (const slot of dayGrid) {
-        // slot format: [startPeriod, endPeriod, "LABEL", optional room string]
         const [startPeriod, , label] = slot;
         if (matchingPeriods.includes(startPeriod)) {
           matches.push({ dept_id: row.dept_id, section: row.section, label });
@@ -106,7 +172,11 @@ export default async () => {
             JSON.stringify({
               title: 'Class starting soon',
               body: `${match.label} starts in ${REMINDER_LEAD_MINUTES} minutes`,
-            })
+            }),
+            {
+              urgency: 'high', // this is the time-sensitive one — must wake the device now
+              TTL: 60,         // a "starts in 10 min" reminder is useless after it's stale
+            }
           );
           sent++;
         } catch (err: any) {
