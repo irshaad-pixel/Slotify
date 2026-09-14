@@ -1174,6 +1174,22 @@
     </div>
   </div>
 
+  <!-- HOME (shown only before a department is first picked) -->
+  <section class="screen" id="homeScreen">
+    <div class="onboard-header">
+      <img class="onboard-mark" src="data:image/png;base64,REPLACE_WITH_YOUR_SAME_LOGO_BASE64" alt="Slotify">
+      <h2>Welcome to Slotify</h2>
+      <p>What do you need right now?</p>
+    </div>
+    <div class="dept-grid" id="homeGrid">
+      <button class="dept-card swatch-0" id="homeSeeTimetableBtn">
+        <span class="code">📅</span><span class="name">See Timetable</span>
+      </button>
+      <button class="dept-card swatch-3" id="homeFreeRoomBtn">
+        <span class="code">🚪</span><span class="name">Free Room Finder</span>
+      </button>
+    </div>
+  </section>
   <!-- DEPARTMENT PICKER -->
   <section class="screen" id="deptScreen">
     <div class="onboard-header">
@@ -2442,13 +2458,7 @@ document.getElementById('calendarCloseBtn').addEventListener('click', () => {
   });
 
   document.getElementById('homeBtn').addEventListener('click', () => {
-    const profile = getProfile();
-    if (profile) {
-      enterApp();
-    } else {
-      renderDeptGrid();
-      navigateTo('deptScreen');
-    }
+    navigateTo('homeScreen');
   });
 
   document.getElementById('returnBtn').addEventListener('click', () => {
@@ -3214,12 +3224,25 @@ document.getElementById('calendarCloseBtn').addEventListener('click', () => {
       enterApp();
       try { history.replaceState({ screen: 'app' }, '', location.pathname + location.search); } catch (e) {}
     } else {
-      renderDeptGrid();
-      showScreen('deptScreen');
-      try { history.replaceState({ screen: 'deptScreen' }, '', location.pathname + location.search); } catch (e) {}
+      // First-time visitors land on the Home screen (Timetable / Free Room
+      // Finder) instead of jumping straight into the department picker.
+      showScreen('homeScreen');
+      try { history.replaceState({ screen: 'homeScreen' }, '', location.pathname + location.search); } catch (e) {}
     }
   }
-
+ 
+Then add these two click handlers anywhere near your other
+addEventListener calls (e.g. right after the "backToDept" one):
+ 
+  document.getElementById('homeSeeTimetableBtn').addEventListener('click', () => {
+    renderDeptGrid();
+    navigateTo('deptScreen');
+  });
+ 
+  document.getElementById('homeFreeRoomBtn').addEventListener('click', () => {
+    navigateTo('roomScreen');
+  });
+  
   // Splash always plays on load, then routes to the right screen.
   document.getElementById('appView').style.display = 'none';
   setTimeout(boot, 0); // prep the screen underneath immediately (invisible until splash fades)
