@@ -2599,6 +2599,13 @@ document.getElementById('calendarCloseBtn').addEventListener('click', () => {
   document.getElementById('homeBtn').addEventListener('click', () => {
     navigateTo('homeScreen');
   });
+  document.getElementById('homeSeeTimetableBtn').addEventListener('click', () => {
+  enterApp();
+});
+
+document.getElementById('homeFreeRoomBtn').addEventListener('click', () => {
+  navigateTo('roomScreen');
+});
 
   document.getElementById('returnBtn').addEventListener('click', () => {
     const profile = getProfile();
