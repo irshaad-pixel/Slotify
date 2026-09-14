@@ -22,6 +22,12 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 const REMINDER_LEAD_MINUTES = 10;
 const DAY_MAP = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// One-time holiday/exam messages (e.g. "Happy Ganesh Chaturthi!") won't be
+// sent before this hour (24-hour, IST) — so people don't get woken up by
+// a festival greeting at midnight. It'll just wait and check again each
+// minute until this hour arrives, then send once as normal.
+const EARLIEST_MESSAGE_HOUR = 8;
+
 // Real period start times (24-hour, IST). Period number -> minutes after midnight.
 const PERIOD_START_MINUTES: Record<number, number> = {
   1: 9 * 60,         // 9:00 AM
@@ -59,8 +65,8 @@ async function sendToAllSubscribers(title: string, body: string) {
     };
     try {
       await webpush.sendNotification(pushSubscription, JSON.stringify({ title, body }), {
-        urgency: 'high', // tells the OS to wake the device immediately, not batch it
-        TTL: 300,        // stop retrying after 5 min — a stale holiday message isn't useful late
+        urgency: 'normal', // a greeting isn't as time-critical as a "starts in 10 min" reminder
+        TTL: 43200,        // 12 hours — survives a phone being off overnight, unlike the 5-min class-reminder TTL
       });
       sent++;
     } catch (err: any) {
@@ -89,8 +95,9 @@ export default async () => {
     if (overrideError) throw overrideError;
 
     if (override) {
-      // Send the one-time message once, the first run of the day it applies.
-      if (override.one_time_message && !override.message_sent) {
+      // Send the one-time message once, the first run of the day it applies,
+      // but not before EARLIEST_MESSAGE_HOUR.
+      if (override.one_time_message && !override.message_sent && istNow.getHours() >= EARLIEST_MESSAGE_HOUR) {
         const sent = await sendToAllSubscribers('Slotify', override.one_time_message);
         await supabase
           .from('calendar_overrides')
@@ -175,7 +182,7 @@ export default async () => {
             }),
             {
               urgency: 'high', // this is the time-sensitive one — must wake the device now
-              TTL: 60,         // a "starts in 10 min" reminder is useless after it's stale
+              TTL: 1200,       // 20 min — gives some slack for brief connectivity gaps
             }
           );
           sent++;
