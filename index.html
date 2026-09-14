@@ -1174,22 +1174,6 @@
     </div>
   </div>
 
-  <!-- HOME (shown only before a department is first picked) -->
-  <section class="screen" id="homeScreen">
-    <div class="onboard-header">
-      <img class="onboard-mark" src="data:image/png;base64,REPLACE_WITH_YOUR_SAME_LOGO_BASE64" alt="Slotify">
-      <h2>Welcome to Slotify</h2>
-      <p>What do you need right now?</p>
-    </div>
-    <div class="dept-grid" id="homeGrid">
-      <button class="dept-card swatch-0" id="homeSeeTimetableBtn">
-        <span class="code">📅</span><span class="name">See Timetable</span>
-      </button>
-      <button class="dept-card swatch-3" id="homeFreeRoomBtn">
-        <span class="code">🚪</span><span class="name">Free Room Finder</span>
-      </button>
-    </div>
-  </section>
   <!-- DEPARTMENT PICKER -->
   <section class="screen" id="deptScreen">
     <div class="onboard-header">
@@ -1209,145 +1193,6 @@
     </div>
     <div class="section-grid" id="sectionGrid"></div>
   </section>
-  <!-- ================= FREE ROOM FINDER (proper screen, no floating button) =================
-     PATCH A: paste this <section> right after your <section id="sectionScreen">...</section>
-     block closes (i.e. as a sibling screen, same level as deptScreen/sectionScreen). -->
-
-<section class="screen" id="roomScreen">
-  <button class="back-link" id="backFromRoom">&larr; Back</button>
-  <div class="onboard-header">
-    <h2>Free Room Finder</h2>
-    <p>Report or find an empty room nearby</p>
-  </div>
-
-  <div style="display:flex;gap:8px;margin:16px 0;padding:0 16px;">
-    <button id="roomTabReport" onclick="showRoomTab('report')" style="flex:1;padding:10px;">📸 Report</button>
-    <button id="roomTabBrowse" onclick="showRoomTab('browse')" style="flex:1;padding:10px;">🔍 Browse</button>
-  </div>
-
-  <div id="roomReportView" style="padding:0 16px;">
-    <p style="opacity:.7;font-size:13px;margin-bottom:10px;">
-      A photo is required — it's what keeps this list trustworthy. Reports auto-expire after 30 minutes.
-    </p>
-    <input type="text" id="roomNumberInput" placeholder="Room number (e.g. 617)"
-      style="width:100%;padding:8px;margin-bottom:8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:#111;color:#fff;">
-    <input type="number" id="roomSeatsInput" placeholder="Seats free (optional)" min="0"
-      style="width:100%;padding:8px;margin-bottom:8px;border-radius:6px;border:1px solid rgba(255,255,255,.2);background:#111;color:#fff;">
-    <input type="file" id="roomPhotoInput" accept="image/*" capture="environment" style="margin-bottom:10px;color:#fff;">
-    <div id="roomPhotoPreviewWrap" style="display:none;margin-bottom:10px;">
-      <img id="roomPhotoPreview" style="max-width:200px;border-radius:8px;">
-    </div>
-    <button id="roomSubmitBtn">Submit report</button>
-    <span id="roomSubmitStatus" style="margin-left:8px;font-size:13px;opacity:.8;"></span>
-  </div>
-
-  <div id="roomBrowseView" style="display:none;padding:0 16px;">
-    <div id="roomList">Loading…</div>
-  </div>
-</section>
-
-<script>
-const ROOM_PHOTO_BUCKET = 'room-photos';
-
-document.getElementById('backFromRoom').addEventListener('click', () => {
-  const profile = getProfile();
-  navigateTo(profile ? 'app' : 'homeScreen');
-  if (profile) enterApp();
-});
-
-function showRoomTab(which) {
-  const reporting = which === 'report';
-  document.getElementById('roomReportView').style.display = reporting ? 'block' : 'none';
-  document.getElementById('roomBrowseView').style.display = reporting ? 'none' : 'block';
-  if (!reporting) renderRoomList();
-}
-
-document.getElementById('roomPhotoInput').addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (ev) => {
-    document.getElementById('roomPhotoPreview').src = ev.target.result;
-    document.getElementById('roomPhotoPreviewWrap').style.display = 'block';
-  };
-  reader.readAsDataURL(file);
-});
-
-document.getElementById('roomSubmitBtn').addEventListener('click', async () => {
-  const roomNumber = document.getElementById('roomNumberInput').value.trim();
-  const seats = document.getElementById('roomSeatsInput').value;
-  const fileInput = document.getElementById('roomPhotoInput');
-  const statusEl = document.getElementById('roomSubmitStatus');
-  const file = fileInput.files[0];
-
-  if (!roomNumber) { statusEl.textContent = 'Enter a room number.'; return; }
-  if (!file) { statusEl.textContent = 'A photo is required.'; return; }
-
-  statusEl.textContent = 'Uploading photo…';
-  const fileExt = file.name.split('.').pop() || 'jpg';
-  const filePath = `${Date.now()}_${Math.random().toString(36).slice(2)}.${fileExt}`;
-
-  const uploadRes = await fetch(
-    `${SUPABASE_URL}/storage/v1/object/${ROOM_PHOTO_BUCKET}/${filePath}`,
-    {
-      method: 'POST',
-      headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': file.type },
-      body: file,
-    }
-  );
-
-  if (!uploadRes.ok) { statusEl.textContent = 'Photo upload failed — try again.'; return; }
-
-  statusEl.textContent = 'Saving report…';
-  const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/room_reports`, {
-    method: 'POST',
-    headers: {
-      apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      'Content-Type': 'application/json', Prefer: 'return=minimal',
-    },
-    body: JSON.stringify([{ room_number: roomNumber, photo_path: filePath, seats_free: seats ? parseInt(seats, 10) : null }]),
-  });
-
-  if (saveRes.ok) {
-    statusEl.textContent = 'Reported ✓ Thanks!';
-    document.getElementById('roomNumberInput').value = '';
-    document.getElementById('roomSeatsInput').value = '';
-    fileInput.value = '';
-    document.getElementById('roomPhotoPreviewWrap').style.display = 'none';
-  } else {
-    statusEl.textContent = 'Failed to save — try again.';
-  }
-});
-
-async function renderRoomList() {
-  const listEl = document.getElementById('roomList');
-  listEl.textContent = 'Loading…';
-  const nowIso = new Date().toISOString();
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/room_reports?select=*&expires_at=gt.${encodeURIComponent(nowIso)}&order=reported_at.desc`,
-    { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } }
-  );
-  if (!res.ok) { listEl.innerHTML = '<p style="opacity:.6;">Could not load reports.</p>'; return; }
-  const rows = await res.json();
-  if (rows.length === 0) { listEl.innerHTML = '<p style="opacity:.6;">No free rooms reported right now. Be the first!</p>'; return; }
-
-  listEl.innerHTML = '';
-  rows.forEach(row => {
-    const minsAgo = Math.max(0, Math.round((Date.now() - new Date(row.reported_at).getTime()) / 60000));
-    const photoUrl = `${SUPABASE_URL}/storage/v1/object/public/${ROOM_PHOTO_BUCKET}/${row.photo_path}`;
-    const card = document.createElement('div');
-    card.style.cssText = 'display:flex;gap:12px;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:10px;margin-bottom:10px;';
-    card.innerHTML = `
-      <img src="${photoUrl}" style="width:80px;height:80px;object-fit:cover;border-radius:6px;flex-shrink:0;">
-      <div>
-        <strong style="font-size:16px;">Room ${row.room_number}</strong><br>
-        ${row.seats_free != null ? `${row.seats_free} seats free<br>` : ''}
-        <span style="opacity:.6;font-size:12px;">reported ${minsAgo} min ago</span>
-      </div>`;
-    listEl.appendChild(card);
-  });
-}
-</script>
 
   <!-- ADMIN LOGIN -->
   <section class="screen" id="adminLoginScreen">
@@ -2597,15 +2442,14 @@ document.getElementById('calendarCloseBtn').addEventListener('click', () => {
   });
 
   document.getElementById('homeBtn').addEventListener('click', () => {
-    navigateTo('homeScreen');
+    const profile = getProfile();
+    if (profile) {
+      enterApp();
+    } else {
+      renderDeptGrid();
+      navigateTo('deptScreen');
+    }
   });
-  document.getElementById('homeSeeTimetableBtn').addEventListener('click', () => {
-  enterApp();
-});
-
-document.getElementById('homeFreeRoomBtn').addEventListener('click', () => {
-  navigateTo('roomScreen');
-});
 
   document.getElementById('returnBtn').addEventListener('click', () => {
     const profile = getProfile();
@@ -3370,25 +3214,12 @@ document.getElementById('homeFreeRoomBtn').addEventListener('click', () => {
       enterApp();
       try { history.replaceState({ screen: 'app' }, '', location.pathname + location.search); } catch (e) {}
     } else {
-      // First-time visitors land on the Home screen (Timetable / Free Room
-      // Finder) instead of jumping straight into the department picker.
-      showScreen('homeScreen');
-      try { history.replaceState({ screen: 'homeScreen' }, '', location.pathname + location.search); } catch (e) {}
+      renderDeptGrid();
+      showScreen('deptScreen');
+      try { history.replaceState({ screen: 'deptScreen' }, '', location.pathname + location.search); } catch (e) {}
     }
   }
- 
-Then add these two click handlers anywhere near your other
-addEventListener calls (e.g. right after the "backToDept" one):
- 
-  document.getElementById('homeSeeTimetableBtn').addEventListener('click', () => {
-    renderDeptGrid();
-    navigateTo('deptScreen');
-  });
- 
-  document.getElementById('homeFreeRoomBtn').addEventListener('click', () => {
-    navigateTo('roomScreen');
-  });
-  
+
   // Splash always plays on load, then routes to the right screen.
   document.getElementById('appView').style.display = 'none';
   setTimeout(boot, 0); // prep the screen underneath immediately (invisible until splash fades)
