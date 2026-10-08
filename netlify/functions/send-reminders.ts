@@ -12,7 +12,7 @@ const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY!;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY!;
 
 webpush.setVapidDetails(
-  'mailto:admin@slotifytt.netlify.app',
+  'mailto:admin@slotifytts.netlify.app',
   VAPID_PUBLIC_KEY,
   VAPID_PRIVATE_KEY
 );
@@ -28,17 +28,21 @@ const DAY_MAP = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // minute until this hour arrives, then send once as normal.
 const EARLIEST_MESSAGE_HOUR = 8;
 
-// Real period start times (24-hour, IST). Period number -> minutes after midnight.
-const PERIOD_START_MINUTES: Record<number, number> = {
-  1: 9 * 60,         // 9:00 AM
-  2: 9 * 60 + 50,     // 9:50 AM
-  3: 10 * 60 + 50,    // 10:50 AM
-  4: 11 * 60 + 40,    // 11:40 AM
-  5: 13 * 60 + 20,    // 1:20 PM
-  6: 14 * 60 + 10,    // 2:10 PM
-  7: 15 * 60 + 10,    // 3:10 PM
-  8: 16 * 60,         // 4:00 PM
+// Period start times (minutes after midnight, IST) for each row layout.
+// 'standard' = periods 1-9 with lunch as period 5 (CSE, AIML, CSBS, IT, ECE ...).
+// 'mech'     = periods 1-8 (Mechanical).
+// These must match ROW_TEMPLATES in index.html.
+const PERIOD_STARTS: Record<string, Record<number, number>> = {
+  standard: { 1: 540, 2: 590, 3: 650, 4: 700, 6: 800, 7: 850, 8: 910, 9: 960 },
+  mech:     { 1: 540, 2: 590, 3: 650, 4: 700, 5: 800, 6: 850, 7: 910, 8: 960 },
 };
+
+// Year-scoped department ids look like "mech@y3" — the base id is "mech".
+function templateFor(deptId: string, saved: Record<string, string>): string {
+  const t = saved[deptId];
+  if (t && PERIOD_STARTS[t]) return t;
+  return deptId.split('@')[0] === 'mech' ? 'mech' : 'standard';
+}
 
 // Get current time in IST regardless of the server's own timezone (Netlify runs in UTC).
 function getISTNow(): Date {
@@ -97,7 +101,7 @@ export default async () => {
     if (override) {
       // Send the one-time message once, the first run of the day it applies,
       // but not before EARLIEST_MESSAGE_HOUR.
-      if (override.one_time_message && !override.message_sent && istNow.getHours() >= EARLIEST_MESSAGE_HOUR) {
+      if (override.one_time_message && !override.message_sent && istNow.getUTCHours() >= EARLIEST_MESSAGE_HOUR) {
         const sent = await sendToAllSubscribers('Slotify', override.one_time_message);
         await supabase
           .from('calendar_overrides')
@@ -119,18 +123,21 @@ export default async () => {
       // If suppress_reminders is false, fall through to normal logic below.
     }
 
-    // --- Normal class-reminder logic (unchanged) ---
-    const dayName = DAY_MAP[istNow.getDay()];
-    const nowMinutes = istNow.getHours() * 60 + istNow.getMinutes();
+    // --- Normal class-reminder logic ---
+    const dayName = DAY_MAP[istNow.getUTCDay()];
+    const nowMinutes = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
     const targetMinutes = nowMinutes + REMINDER_LEAD_MINUTES;
 
-    const matchingPeriods = Object.entries(PERIOD_START_MINUTES)
-      .filter(([, startMin]) => startMin === targetMinutes)
-      .map(([period]) => Number(period));
-
-    if (matchingPeriods.length === 0) {
+    // Skip the database entirely when no period of any layout starts in 10 minutes.
+    const anyPeriod = Object.values(PERIOD_STARTS).some(m => Object.values(m).includes(targetMinutes));
+    if (!anyPeriod) {
       return new Response(JSON.stringify({ ok: true, sent: 0, reason: 'no period starting in 10 min' }), { status: 200 });
     }
+
+    // Saved row layouts for custom / per-year departments
+    const { data: deptRows } = await supabase.from('departments').select('id, row_template');
+    const savedTemplates: Record<string, string> = {};
+    for (const d of deptRows ?? []) if (d.row_template) savedTemplates[d.id] = d.row_template;
 
     const { data: timetables, error: ttError } = await supabase
       .from('timetables')
@@ -144,10 +151,18 @@ export default async () => {
       const dayGrid = row.grid?.[dayName];
       if (!dayGrid) continue;
 
+      const starts = PERIOD_STARTS[templateFor(row.dept_id, savedTemplates)];
+      const matchingPeriods = Object.entries(starts)
+        .filter(([, startMin]) => startMin === targetMinutes)
+        .map(([period]) => Number(period));
+      if (matchingPeriods.length === 0) continue;
+
       for (const slot of dayGrid) {
         const [startPeriod, , label] = slot;
         if (matchingPeriods.includes(startPeriod)) {
-          matches.push({ dept_id: row.dept_id, section: row.section, label });
+          // use the full subject name if the admin added one for this timetable
+          const full = row.grid?._legend?.[label]?.name;
+          matches.push({ dept_id: row.dept_id, section: row.section, label: full || label });
         }
       }
     }
