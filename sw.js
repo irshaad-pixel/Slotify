@@ -1,6 +1,6 @@
 // Slotify service worker — push notifications + offline app shell.
 // Bump CACHE_VERSION whenever you deploy changes so everyone gets the update.
-const CACHE_VERSION = 'slotify-v3';
+const CACHE_VERSION = 'slotify-v5';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './bg-pattern.svg'];
 
 self.addEventListener('install', (event) => {
