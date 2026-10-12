@@ -2808,19 +2808,27 @@ document.getElementById('calendarCloseBtn').addEventListener('click', () => {
         });
       }
       const json = sub.toJSON();
-      await fetch(`${SUPABASE_URL}/rest/v1/push_subscriptions`, {
-        method: 'POST',
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-          Prefer: 'resolution=merge-duplicates,return=minimal',
-        },
-        body: JSON.stringify([{
-          dept_id: deptId, section: sectionKey,
-          endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth,
-        }]),
+      const hdr = {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      };
+      const row = JSON.stringify([{
+        dept_id: deptId, section: sectionKey,
+        endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth,
+      }]);
+      // Update this device's row (so a changed year/department is saved), not just insert once.
+      let res = await fetch(`${SUPABASE_URL}/rest/v1/push_subscriptions?on_conflict=endpoint`, {
+        method: 'POST', headers: { ...hdr, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: row,
       });
+      if (!res.ok) {
+        // Fallback: remove this device's old row, then add it again with the new year/department.
+        await fetch(`${SUPABASE_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(json.endpoint)}`, { method: 'DELETE', headers: hdr });
+        res = await fetch(`${SUPABASE_URL}/rest/v1/push_subscriptions`, {
+          method: 'POST', headers: { ...hdr, Prefer: 'return=minimal' }, body: row,
+        });
+      }
+      if (!res.ok) { console.warn('Push subscription not saved', res.status); return false; }
       return true;
     } catch (e) {
       console.warn('Push subscription failed (will still use in-app reminders)', e);
@@ -2946,6 +2954,16 @@ document.getElementById('calendarCloseBtn').addEventListener('click', () => {
         });
         added = true;
       });
+      // A student who saved an admin-added department (e.g. a new year-3 department) opens the app
+      // before this list has loaded — refresh the badge and timetable now that the department is known.
+      const prof = getProfile();
+      if (prof && DEPARTMENTS.find(d => d.id === prof.deptId) &&
+          document.getElementById('deptBadgeText').textContent !== deptLabel(prof)) {
+        document.getElementById('deptBadgeText').textContent = deptLabel(prof);
+        document.getElementById('deptBadge').title = 'Switch department — ' + deptLabel(prof);
+        buildGrid();
+        updateUpNext();
+      }
       if (!added) return;
       // Re-render whichever picker is currently on screen so new departments show up live
       if (document.getElementById('deptScreen').classList.contains('active')) renderDeptGrid();
