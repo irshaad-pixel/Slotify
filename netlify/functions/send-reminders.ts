@@ -46,10 +46,9 @@ function templateFor(deptId: string, saved: Record<string, string>): string {
 
 // Get current time in IST regardless of the server's own timezone (Netlify runs in UTC).
 function getISTNow(): Date {
-  const now = new Date();
-  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
-  const istOffsetMs = 5.5 * 60 * 60000;
-  return new Date(utcMs + istOffsetMs);
+  // Shift "now" by +5:30. The result's UTC fields (getUTCHours, getUTCDay, ...) read as IST,
+  // whatever timezone the server itself runs in.
+  return new Date(Date.now() + 5.5 * 60 * 60000);
 }
 
 function toDateString(d: Date): string {
